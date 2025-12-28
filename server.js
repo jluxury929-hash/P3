@@ -9,77 +9,96 @@ const CONFIG = {
     USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     CBETH: "0x2Ae3F1Ec7F1F5563a3d161649c025dac7e983970",
     GAS_ORACLE: "0x420000000000000000000000000000000000000F",
-    CHAINLINK_FEED: "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70", // Automatic ETH Price
+    CHAINLINK_FEED: "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
     MARGIN_ETH: process.env.MARGIN_ETH || "0.01" 
 };
 
-async function startZeroMaintenanceTitan() {
-    const provider = new WebSocketProvider(CONFIG.WSS_URL);
-    const signer = new Wallet(process.env.TREASURY_PRIVATE_KEY, provider);
+// 🛠️ THE SELF-HEALING WRAPPER
+async function startTitan() {
+    console.log("🟢 [BOOT] INITIALIZING SECURE WEBSOCKET...");
     
-    // Contracts for Automatic Data
+    let provider;
+    try {
+        provider = new WebSocketProvider(CONFIG.WSS_URL);
+    } catch (e) {
+        console.error("❌ CONNECTION FAILED. RETRYING IN 5S...");
+        return setTimeout(startTitan, 5000);
+    }
+
+    const signer = new Wallet(process.env.TREASURY_PRIVATE_KEY, provider);
     const priceFeed = new Contract(CONFIG.CHAINLINK_FEED, ["function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)"], provider);
     const gasOracle = new Contract(CONFIG.GAS_ORACLE, ["function getL1Fee(bytes) view returns (uint256)"], provider);
     const titanIface = new Interface(["function executeTriangle(address[],uint256)"]);
 
-    console.log("🚀 TITAN STARTING... NO MANUAL SETTINGS REQUIRED.");
-
+    // HEARTBEAT & PRICE
     provider.on("block", async (num) => {
-        const [, price] = await priceFeed.latestRoundData();
-        const ethUSD = Number(price) / 1e8;
-        process.stdout.write(`\r⛓️ BLOCK: ${num} | ETH: $${ethUSD.toFixed(2)} | Titan is Self-Optimizing... `);
+        try {
+            const [, price] = await priceFeed.latestRoundData();
+            const ethUSD = Number(price) / 1e8;
+            process.stdout.write(`\r⛓️ BLOCK: ${num} | ETH: $${ethUSD.toFixed(2)} | Titan Active `);
+        } catch (e) { /* Provider might be mid-reconnect */ }
     });
 
     const swapTopic = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
 
     provider.on({ topics: [swapTopic] }, async (log) => {
         try {
-            // 1. AUTO-FILTER: Only care about swaps hitting our target tokens
             if (!log.topics.some(t => t.toLowerCase().includes(CONFIG.CBETH.toLowerCase().slice(2)))) return;
 
-            // 2. AUTO-LOAN: Scale based on current wallet capacity
             const balance = await provider.getBalance(signer.address);
             const loanAmount = balance > ethers.parseEther("0.1") ? ethers.parseEther("100") : ethers.parseEther("25");
-
-            const paths = [
-                [CONFIG.WETH, CONFIG.USDC, CONFIG.CBETH, CONFIG.WETH],
-                [CONFIG.WETH, CONFIG.CBETH, CONFIG.USDC, CONFIG.WETH]
-            ];
+            const paths = [[CONFIG.WETH, CONFIG.USDC, CONFIG.CBETH, CONFIG.WETH], [CONFIG.WETH, CONFIG.CBETH, CONFIG.USDC, CONFIG.WETH]];
 
             for (const path of paths) {
                 const data = titanIface.encodeFunctionData("executeTriangle", [path, loanAmount]);
-
-                // 3. AUTO-ECONOMICS: Pre-calculate everything on-the-fly
                 const [simulation, l1Fee, feeData] = await Promise.all([
                     provider.call({ to: CONFIG.TARGET_CONTRACT, data, from: signer.address }).catch(() => null),
-                    gasOracle.getL1Fee(data),
+                    gasOracle.getL1Fee(data).catch(() => 0n),
                     provider.getFeeData()
                 ]);
 
                 if (!simulation) continue;
 
-                // Automatic gas estimation with 20% safety buffer
-                const gasEstimate = await provider.estimateGas({ to: CONFIG.TARGET_CONTRACT, data, from: signer.address }).catch(() => 1200000n);
-                const gasCost = gasEstimate * (feeData.maxFeePerGas || feeData.gasPrice);
-                
-                const totalCost = gasCost + l1Fee + (loanAmount * 9n / 10000n);
+                const gasEstimate = 1250000n; // Safe triangular estimate
+                const totalCost = (gasEstimate * feeData.gasPrice) + l1Fee + (loanAmount * 9n / 10000n);
                 const netProfit = BigInt(simulation) - totalCost;
 
                 if (netProfit > ethers.parseEther(CONFIG.MARGIN_ETH)) {
-                    console.log(`\n🎯 PROFIT: ${ethers.formatEther(netProfit)} ETH | STRATEGIZING STRIKE...`);
-                    
+                    console.log(`\n🎯 PROFIT DETECTED: ${ethers.formatEther(netProfit)} ETH`);
                     await signer.sendTransaction({
                         to: CONFIG.TARGET_CONTRACT,
                         data,
-                        gasLimit: (gasEstimate * 120n) / 100n, // 20% Auto-Buffer
+                        gasLimit: gasEstimate,
                         maxFeePerGas: feeData.maxFeePerGas,
                         maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
                         type: 2
                     });
                 }
             }
-        } catch (e) { /* Auto-ignore reverts */ }
+        } catch (e) { /* Ignore failed sim */ }
     });
+
+    // 🛡️ THE FIX: Listen to the internal websocket events correctly
+    provider.on("error", (e) => {
+        console.error("\n⚠️ PROVIDER ERROR:", e.message);
+        reconnect();
+    });
+
+    // Alchemy/Infura often close idle connections after 60s
+    const reconnect = () => {
+        console.log("♻️ RECONNECTING TITAN...");
+        provider.destroy(); // Cleanup old listeners
+        setTimeout(startTitan, 3000);
+    };
+
+    // Keepalive ping to prevent idle timeout
+    const keepAlive = setInterval(async () => {
+        try { await provider.getBlockNumber(); } 
+        catch (e) { 
+            clearInterval(keepAlive);
+            reconnect(); 
+        }
+    }, 30000);
 }
 
-startZeroMaintenanceTitan();
+startTitan().catch(console.error);
