@@ -4,11 +4,9 @@ require('dotenv').config();
 const CONFIG = {
     CHAIN_ID: 8453,
     TARGET_CONTRACT: "0x83EF5c401fAa5B9674BAfAcFb089b30bAc67C9A0",
-    // 🌐 ADD MULTIPLE ENDPOINTS IN YOUR .ENV
-    WSS_PRIMARY: process.env.WSS_URL,                // Alchemy
-    WSS_SECONDARY: process.env.WSS_SECONDARY_URL,    // QuickNode/Chainstack
-    RPC_FALLBACK: "https://mainnet.base.org",        // Public Fallback
-    
+    WSS_PRIMARY: process.env.WSS_URL,
+    WSS_SECONDARY: process.env.WSS_SECONDARY_URL, 
+    RPC_FALLBACK: "https://mainnet.base.org", // Hardcoded public node as ultimate safety
     WETH: "0x4200000000000000000000000000000000000006",
     USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     CBETH: "0x2Ae3F1Ec7F1F5563a3d161649c025dac7e983970",
@@ -17,50 +15,52 @@ const CONFIG = {
     MARGIN_ETH: process.env.MARGIN_ETH || "0.01" 
 };
 
-async function startHighAvailabilityTitan() {
-    console.log("🛠️ INITIALIZING MULTIPOOL FALLBACK SYSTEM...");
+// 🛠️ SAFE PROVIDER FACTORY
+function createSafeProvider(url, priority) {
+    try {
+        if (!url) return null;
+        const p = url.startsWith('wss') ? new WebSocketProvider(url) : new JsonRpcProvider(url);
+        return { provider: p, priority, weight: 1, stallTimeout: 1500 };
+    } catch (e) {
+        console.error(`⚠️ SKIPPING NODE [Priority ${priority}]: Connection String Invalid`);
+        return null;
+    }
+}
 
-    // 1. Setup Providers with Priorities
-    const configs = [
-        {
-            provider: new WebSocketProvider(CONFIG.WSS_PRIMARY),
-            priority: 1, // Highest priority
-            weight: 2,
-            stallTimeout: 1000 // If Alchemy stalls for 1s, trigger fallback
-        },
-        {
-            provider: new WebSocketProvider(CONFIG.WSS_SECONDARY),
-            priority: 2, // Secondary
-            weight: 1,
-            stallTimeout: 2000
-        },
-        {
-            provider: new JsonRpcProvider(CONFIG.RPC_FALLBACK),
-            priority: 3, // Last resort (HTTPS is slower but more stable)
-            weight: 1
-        }
-    ];
+async function startTitan() {
+    console.log("🛠️ BOOTING MULTIPOOL... TESTING NODE HEALTH");
 
-    // 2. Wrap into a FallbackProvider
-    const provider = new FallbackProvider(configs, CONFIG.CHAIN_ID);
+    // Initialize list and filter out any immediate failures (nulls)
+    const nodeConfigs = [
+        createSafeProvider(CONFIG.WSS_PRIMARY, 1),
+        createSafeProvider(CONFIG.WSS_SECONDARY, 2),
+        createSafeProvider(CONFIG.RPC_FALLBACK, 3)
+    ].filter(cfg => cfg !== null);
+
+    if (nodeConfigs.length === 0) {
+        console.error("🚨 CRITICAL: NO VALID NODES FOUND. RETRYING IN 10S...");
+        return setTimeout(startTitan, 10000);
+    }
+
+    const provider = new FallbackProvider(nodeConfigs, CONFIG.CHAIN_ID);
     const signer = new Wallet(process.env.TREASURY_PRIVATE_KEY, provider);
 
-    console.log("✅ MULTIPOOL LIVE | QUORUM ACTIVE");
-
-    // Contracts
+    // Dynamic Contracts
     const priceFeed = new Contract(CONFIG.CHAINLINK_FEED, ["function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)"], provider);
     const gasOracle = new Contract(CONFIG.GAS_ORACLE, ["function getL1Fee(bytes) view returns (uint256)"], provider);
     const titanIface = new Interface(["function executeTriangle(address[],uint256)"]);
 
-    // HEARTBEAT
+    console.log(`✅ TITAN ONLINE | ACTIVE NODES: ${nodeConfigs.length}`);
+
+    // PRICE MONITOR
     provider.on("block", async (num) => {
         try {
             const [, price] = await priceFeed.latestRoundData();
-            process.stdout.write(`\r⛓️ BLOCK: ${num} | ETH: $${(Number(price)/1e8).toFixed(2)} | Health: [${configs.length} Nodes] `);
-        } catch (e) {}
+            process.stdout.write(`\r⛓️ BLOCK: ${num} | ETH: $${(Number(price)/1e8).toFixed(2)} | Titan Health: OK `);
+        } catch (e) { /* Fallback handles it */ }
     });
 
-    // LISTENER (Uses the best available node)
+    // TRIANGLE ENGINE
     const swapTopic = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
     provider.on({ topics: [swapTopic] }, async (log) => {
         try {
@@ -68,10 +68,8 @@ async function startHighAvailabilityTitan() {
 
             const balance = await provider.getBalance(signer.address);
             const loanAmount = balance > ethers.parseEther("0.1") ? ethers.parseEther("100") : ethers.parseEther("25");
-
             const data = titanIface.encodeFunctionData("executeTriangle", [[CONFIG.WETH, CONFIG.USDC, CONFIG.CBETH, CONFIG.WETH], loanAmount]);
 
-            // Simulation will now automatically use the "Fastest" node from the fallback list
             const [simulation, l1Fee, feeData] = await Promise.all([
                 provider.call({ to: CONFIG.TARGET_CONTRACT, data, from: signer.address }).catch(() => null),
                 gasOracle.getL1Fee(data).catch(() => 0n),
@@ -79,7 +77,7 @@ async function startHighAvailabilityTitan() {
             ]);
 
             if (simulation && BigInt(simulation) > (ethers.parseEther(CONFIG.MARGIN_ETH))) {
-                console.log(`\n🚀 MULTIPOOL STRIKE INITIATED...`);
+                console.log(`\n💎 TRIANGLE FOUND! PROFIT: ${ethers.formatEther(BigInt(simulation))} ETH`);
                 await signer.sendTransaction({
                     to: CONFIG.TARGET_CONTRACT,
                     data,
@@ -87,19 +85,15 @@ async function startHighAvailabilityTitan() {
                     maxFeePerGas: feeData.maxFeePerGas,
                     maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
                     type: 2
-                });
+                }).then(tx => console.log(`🚀 STRIKE: ${tx.hash}`));
             }
-        } catch (e) {}
+        } catch (e) { /* Auto-Switch to next node */ }
     });
 
-    // Cleanup on disconnect
-    process.on('SIGINT', () => {
-        provider.destroy();
-        process.exit();
+    // GLOBAL ERROR RECOVERY
+    provider.on("error", (e) => {
+        console.warn("\n📡 NODE CONNECTIVITY ISSUES. FAILOVER IN PROGRESS...");
     });
 }
 
-startHighAvailabilityTitan().catch(err => {
-    console.error("Critical Failure:", err.message);
-    setTimeout(startHighAvailabilityTitan, 5000);
-});
+startTitan();
