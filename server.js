@@ -1,5 +1,5 @@
 // ===============================================================================
-// APEX ULTIMATE OMNISCIENT SNIPER v26.1 (MERGED) - HIGH-FREQUENCY CLUSTER
+// APEX SNIPER MASTER v24.1 (ULTIMATE MERGE) - HIGH-FREQUENCY CLUSTER
 // ===============================================================================
 
 const cluster = require('cluster');
@@ -39,21 +39,20 @@ const TXT = {
 // --- CONFIGURATION ---
 const GLOBAL_CONFIG = {
     TARGET_CONTRACT: process.env.TARGET_CONTRACT || "0x83EF5c401fAa5B9674BAfAcFb089b30bAc67C9A0", 
-    BENEFICIARY: process.env.BENEFICIARY || "0x35c3ECfFBBDd942a8DbA7587424b58f74D6D6D15",
+    BENEFICIARY: process.env.BENEFICIARY || "0x4B8251e7c80F910305bb81547e301DcB8A596918",
     
-    // ASSETS & POOLS
+    // ASSETS
     WETH: "0x4200000000000000000000000000000000000006",
     USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     CBETH: "0x2Ae3F1Ec7F1F5563a3d161649c025dac7e983970",
-    WETH_USDC_POOL: "0x88A43bb75941904d47401946215162a26bc773dc",
 
     // STRATEGY SETTINGS
     WHALE_THRESHOLD: parseEther("15.0"), // 15 ETH Trigger
     MIN_LOG_ETH: parseEther("10.0"),      // Leviathan Confirmation
-    GAS_LIMIT: 1250000n,                 // v26.0 Optimized Limit
+    GAS_LIMIT: 1400000n,                 // v24.0 Limit
     PORT: process.env.PORT || 8080,
-    MARGIN_ETH: process.env.MARGIN_ETH || "0.015", // v26.0 Margin
-    PRIORITY_BRIBE: 15n,                 // 15% Tip (v26.0)
+    MARGIN_ETH: process.env.MARGIN_ETH || "0.01", // v24.0 Margin
+    PRIORITY_BRIBE: 15n,                 // 15% Tip
 
     // 🌍 NETWORKS
     NETWORKS: [
@@ -103,20 +102,20 @@ const GLOBAL_CONFIG = {
 if (cluster.isPrimary) {
     console.clear();
     console.log(`${TXT.bold}${TXT.gold}╔════════════════════════════════════════════════════════╗${TXT.reset}`);
-    console.log(`${TXT.bold}${TXT.gold}║   ⚡ APEX ULTIMATE MASTER v26.1 | CLUSTER EDITION      ║${TXT.reset}`);
-    console.log(`${TXT.bold}${TXT.gold}║   MODE: OMNISCIENT SNIPE + POOL-DEPTH + HEARTBEAT     ║${TXT.reset}`);
+    console.log(`${TXT.bold}${TXT.gold}║   ⚡ APEX SNIPER MASTER v24.1 | CLUSTER EDITION        ║${TXT.reset}`);
+    console.log(`${TXT.bold}${TXT.gold}║   DUAL: WHALE SNIPING + TRIANGLE + HEARTBEAT MONITOR  ║${TXT.reset}`);
     console.log(`${TXT.bold}${TXT.gold}╚════════════════════════════════════════════════════════╝${TXT.reset}\n`);
 
     const cpuCount = os.cpus().length;
-    console.log(`${TXT.green}[SYSTEM] Booting Multi-Core Engines (${cpuCount} cores)...${TXT.reset}`);
-    console.log(`${TXT.cyan}[CONFIG] Target Locked: ${GLOBAL_CONFIG.TARGET_CONTRACT}${TXT.reset}\n`);
+    console.log(`${TXT.green}[SYSTEM] Initializing Multi-Core Sniper (${cpuCount} cores)...${TXT.reset}`);
+    console.log(`${TXT.cyan}[CONFIG] Profit Target: ${GLOBAL_CONFIG.BENEFICIARY}${TXT.reset}\n`);
 
     for (let i = 0; i < cpuCount; i++) {
         cluster.fork();
     }
 
     cluster.on('exit', (worker) => {
-        console.log(`${TXT.red}⚠️  Worker ${worker.process.pid} died. Respawning...${TXT.reset}`);
+        console.log(`${TXT.red}⚠️  Worker ${worker.process.pid} offline. Rebooting...${TXT.reset}`);
         setTimeout(() => cluster.fork(), 3000);
     });
 } 
@@ -141,7 +140,7 @@ async function initWorker(CHAIN) {
         const server = http.createServer((req, res) => {
             if (req.url === '/status') {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: "ONLINE", chain: CHAIN.name, mode: "ULTIMATE_v26" }));
+                res.end(JSON.stringify({ status: "ONLINE", chain: CHAIN.name, mode: "SNIPER_v24" }));
             } else { res.writeHead(404); res.end(); }
         });
         server.on('error', () => {});
@@ -152,11 +151,11 @@ async function initWorker(CHAIN) {
     let rawKey = process.env.TREASURY_PRIVATE_KEY || process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000001";
     const cleanKey = rawKey.trim();
     if (cleanKey.length !== 66 && cleanKey.length !== 64) {
-        throw new Error(`Invalid Key Length: ${cleanKey.length}.`);
+        throw new Error(`Invalid Key Length: ${cleanKey.length}. Expected 64 or 66.`);
     }
     
     // 3. PROVIDERS & CONTRACTS
-    let provider, wsProvider, wallet, gasOracle, priceFeed, poolContract;
+    let provider, wsProvider, wallet, gasOracle, priceFeed;
     let currentEthPrice = 0;
     let scanCount = 0;
 
@@ -189,16 +188,11 @@ async function initWorker(CHAIN) {
                 currentEthPrice = Number(price) / 1e8;
             } catch(e) {}
         }
-        
-        // POOL CONTRACT (v26.0 Depth Check)
-        if (CHAIN.chainId === 8453) {
-            poolContract = new Contract(GLOBAL_CONFIG.WETH_USDC_POOL, ["function getReserves() external view returns (uint112, uint112, uint32)"], provider);
-        }
 
-        // 4. HEARTBEAT & PRICE LOOP (v24.0 Monitor)
+        // 4. HEARTBEAT & PRICE LOOP (v24.0 Fix)
         setInterval(async () => {
             try {
-                await wsProvider.getBlockNumber(); 
+                await wsProvider.getBlockNumber(); // Verify connection is live
                 if (priceFeed) {
                     const [, price] = await priceFeed.latestRoundData();
                     currentEthPrice = Number(price) / 1e8;
@@ -207,16 +201,16 @@ async function initWorker(CHAIN) {
                 console.log(`${TXT.red}💔 HEARTBEAT FAILED on ${TAG}. RESTARTING...${TXT.reset}`);
                 process.exit(1);
             }
-        }, 12000);
+        }, 15000);
         
-        console.log(`${TXT.green}✅ ENGINE ${cluster.worker.id} ACTIVE${TXT.reset} on ${TAG}`);
+        console.log(`${TXT.green}✅ SNIPER ${cluster.worker.id} ACTIVE${TXT.reset} on ${TAG}`);
     } catch (e) {
         console.log(`${TXT.red}❌ Init Failed on ${TAG}: ${e.message}${TXT.reset}`);
         return;
     }
 
     const titanIface = new Interface([
-        "function requestTitanLoan(address _token, uint256 _amount, address[] calldata _path)",
+        "function flashLoanSimple(address receiverAddress, address asset, uint256 amount, bytes calldata params, uint16 referralCode)",
         "function executeTriangle(address[] path, uint256 amount)"
     ]);
 
@@ -228,7 +222,8 @@ async function initWorker(CHAIN) {
         } catch (e) {}
     }
 
-    // 5. ULTIMATE SNIPER ENGINE
+    // 5. SNIPER ENGINE
+    // A. PENDING SNIPER (Omniscient Speed Layer)
     wsProvider.on("pending", async (txHash) => {
         try {
             scanCount++;
@@ -244,8 +239,8 @@ async function initWorker(CHAIN) {
             
             // Trigger 1: Omniscient Whale Spied
             if (valueWei >= GLOBAL_CONFIG.WHALE_THRESHOLD) {
-                console.log(`\n${TAG} ${TXT.magenta}🚨 OMNISCIENT WHALE DETECTED: ${formatEther(valueWei)} ETH | Hash: ${txHash.substring(0, 10)}...${TXT.reset}`);
-                await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, flashbotsProvider, "OMNISCIENT");
+                console.log(`\n${TAG} ${TXT.magenta}🚨 OMNISCIENT SPOTTED WHALE: ${formatEther(valueWei)} ETH | ${txHash.substring(0, 10)}...${TXT.reset}`);
+                await attemptOmniscientStrike(provider, wallet, titanIface, gasOracle, currentEthPrice, CHAIN, flashbotsProvider);
             }
             
             // Trigger 2: Triangle Volatility Probe
@@ -255,6 +250,7 @@ async function initWorker(CHAIN) {
         } catch (err) {}
     });
 
+    // B. LOG SNIPER (Leviathan Accuracy Layer)
     const swapTopic = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
     wsProvider.on({ topics: [swapTopic] }, async (log) => {
         try {
@@ -262,41 +258,36 @@ async function initWorker(CHAIN) {
             const maxSwap = decoded.reduce((max, val) => val > max ? val : max, 0n);
 
             if (maxSwap >= GLOBAL_CONFIG.MIN_LOG_ETH) {
-                 console.log(`\n${TAG} ${TXT.yellow}🐳 LEVIATHAN LOG CONFIRMED: ${formatEther(maxSwap)} ETH${TXT.reset}`);
-                 await attemptStrike(provider, wallet, titanIface, gasOracle, poolContract, currentEthPrice, CHAIN, flashbotsProvider, "LEVIATHAN");
+                 console.log(`\n${TAG} ${TXT.yellow}🐳 LEVIATHAN SWAP CONFIRMED: ${formatEther(maxSwap)} ETH${TXT.reset}`);
+                 await attemptOmniscientStrike(provider, wallet, titanIface, gasOracle, currentEthPrice, CHAIN, flashbotsProvider);
             }
         } catch (e) {}
     });
 }
 
-// --- STRIKE LOGIC ---
-async function attemptStrike(provider, wallet, iface, gasOracle, pool, ethPrice, CHAIN, flashbotsProvider, mode) {
+// --- STRIKE LOGIC: OMNISCIENT ---
+async function attemptOmniscientStrike(provider, wallet, iface, gasOracle, ethPrice, CHAIN, flashbotsProvider) {
     try {
-        let loanAmount;
+        const balanceWei = await provider.getBalance(wallet.address);
+        const ethBalance = parseFloat(formatEther(balanceWei));
+        // Scale loan: high balance gets 100 ETH, else 25 ETH
+        const loanAmount = ethBalance > 0.1 ? parseEther("100") : parseEther("25");
 
-        // v26.1 DUAL SCALING (Pool Depth + Wealth)
-        if (pool && CHAIN.chainId === 8453) {
-            try {
-                const [res0] = await pool.getReserves();
-                loanAmount = BigInt(res0) / 10n; // 10% Pool Reserve Rule (v26.0)
-            } catch (e) {
-                loanAmount = parseEther("25");
-            }
-        } else {
-            const balanceWei = await provider.getBalance(wallet.address);
-            loanAmount = balanceWei > parseEther("0.1") ? parseEther("100") : parseEther("25");
-        }
+        const wethAddress = CHAIN.chainId === 8453 ? GLOBAL_CONFIG.WETH : "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; 
 
-        const strikeData = iface.encodeFunctionData("requestTitanLoan", [
-            GLOBAL_CONFIG.WETH, 
+        const strikeData = iface.encodeFunctionData("flashLoanSimple", [
+            GLOBAL_CONFIG.TARGET_CONTRACT,
+            wethAddress, 
             loanAmount,
-            [GLOBAL_CONFIG.WETH, GLOBAL_CONFIG.USDC]
+            "0x", 
+            0
         ]);
 
-        await executeStrikeInternal(provider, wallet, strikeData, loanAmount, gasOracle, ethPrice, CHAIN, flashbotsProvider, mode);
+        await executeStrikeInternal(provider, wallet, strikeData, loanAmount, gasOracle, ethPrice, CHAIN, flashbotsProvider, "OMNISCIENT");
     } catch (e) {}
 }
 
+// --- STRIKE LOGIC: TRIANGLE ---
 async function attemptTriangleStrike(provider, wallet, iface, gasOracle, ethPrice, CHAIN, flashbotsProvider) {
     try {
         const loanAmount = parseEther("25"); 
@@ -333,11 +324,9 @@ async function executeStrikeInternal(provider, wallet, strikeData, loanAmount, g
 
         if (rawProfit > totalCostThreshold) {
             const cleanProfitEth = rawProfit - (l2Cost + l1Fee + aaveFee);
-            console.log(`\n${TXT.green}${TXT.bold}💎 ${mode} STRIKE AUTHORIZED${TXT.reset} | Est. Net: ${formatEther(cleanProfitEth)} ETH`);
+            console.log(`\n${TXT.green}${TXT.bold}💎 ${mode} STRIKE AUTHORIZED${TXT.reset} | Net: ${formatEther(cleanProfitEth)} ETH`);
 
-            // v26.0 Bribe Optimization (15%)
-            const aggressivePriority = feeData.maxPriorityFeePerGas + 
-                ((feeData.maxPriorityFeePerGas * GLOBAL_CONFIG.PRIORITY_BRIBE) / 100n);
+            const aggressivePriority = (feeData.maxPriorityFeePerGas * (100n + GLOBAL_CONFIG.PRIORITY_BRIBE)) / 100n;
 
             const txPayload = {
                 to: GLOBAL_CONFIG.TARGET_CONTRACT,
@@ -356,7 +345,7 @@ async function executeStrikeInternal(provider, wallet, strikeData, loanAmount, g
             if (CHAIN.type === "FLASHBOTS" && flashbotsProvider) {
                 const bundle = [{ signedTransaction: signedTx }];
                 await flashbotsProvider.sendBundle(bundle, (await provider.getBlockNumber()) + 1);
-                console.log(`   ${TXT.green}🎉 Private Bundle Dispatched (Mainnet)${TXT.reset}`);
+                console.log(`   ${TXT.green}🎉 Bundle Secured (Mainnet Relay)${TXT.reset}`);
             } else {
                 const relayResponse = await axios.post(CHAIN.privateRpc || CHAIN.rpc, {
                     jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [signedTx]
@@ -364,7 +353,7 @@ async function executeStrikeInternal(provider, wallet, strikeData, loanAmount, g
 
                 if (relayResponse && relayResponse.data && relayResponse.data.result) {
                     console.log(`   ${TXT.green}🎉 SUCCESS: ${relayResponse.data.result}${TXT.reset}`);
-                    console.log(`   ${TXT.bold}💸 FUNDS SECURED AT: ${GLOBAL_CONFIG.BENEFICIARY}${TXT.reset}`);
+                    console.log(`   ${TXT.bold}💸 SECURED AT: ${GLOBAL_CONFIG.BENEFICIARY}${TXT.reset}`);
                     process.exit(0);
                 } else {
                     await wallet.sendTransaction(txPayload).catch(() => {});
